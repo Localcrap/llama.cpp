@@ -88,6 +88,8 @@ add_library(${TARGET} STATIC
     regex-partial.h
     sampling.cpp
     sampling.h
+    speculative-prefill.cpp
+    speculative-prefill.h
     speculative.cpp
     speculative.h
     unicode.cpp

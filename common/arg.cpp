@@ -3500,6 +3500,110 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--spec-type"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]",
         string_format("type of speculative decoding to use when no draft model is provided (default: %s)\n",
             common_speculative_type_to_str(params.speculative.type).c_str()),
+        {"--spec-prefill", "--speculative-prefill"},
+        "enable speculative prefill using draft model to filter prompt tokens",
+        [](common_params & params) {
+            params.speculative.prefill.enabled = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL"));
+    add_opt(common_arg(
+        {"--spec-prefill-draft-model", "--spec-prefill-model", "-mpd", "--speculative-prefill-model", "--speculative-prefill-draft-model"}, "FNAME",
+        "draft model for speculative prefill (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.speculative.prefill.model.path    = value;
+            params.speculative.prefill.model.hf_file = value; // will be used if --spec-prefill-hf is set
+            params.speculative.prefill.enabled       = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_MODEL"));
+    add_opt(common_arg(
+        {"--spec-prefill-draft-hf", "--spec-prefill-hf", "-hfpd", "--speculative-prefill-hf", "--speculative-prefill-draft-hf"}, "<user>/<model>[:quant]",
+        "Hugging Face model repository for speculative prefill draft model (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.speculative.prefill.model.hf_repo = value;
+            params.speculative.prefill.enabled       = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_HF"));
+    add_opt(common_arg(
+        {"--spec-prefill-draft-ngl", "--spec-prefill-ngl", "-nglpd", "--speculative-prefill-ngl", "--speculative-prefill-draft-ngl"}, "N",
+        string_format("max. number of speculative prefill draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: %s)",
+            params.speculative.prefill.n_gpu_layers == -1 ? "auto" : "all"),
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.speculative.prefill.n_gpu_layers = -1;
+            } else if (value == "all") {
+                params.speculative.prefill.n_gpu_layers = -2;
+            } else {
+                params.speculative.prefill.n_gpu_layers = std::stoi(value);
+            }
+            if (!llama_supports_gpu_offload()) {
+                fprintf(stderr, "warning: no usable GPU found, --spec-prefill-ngl option will be ignored\n");
+                fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
+                fprintf(stderr, "warning: consult docs/build.md for compilation instructions\n");
+            }
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_N_GPU_LAYERS"));
+    add_opt(common_arg(
+        {"--spec-prefill-draft-device", "--spec-prefill-device", "-devpd", "--speculative-prefill-device", "--speculative-prefill-draft-device"}, "<dev1,dev2,..>",
+        "comma-separated list of devices to use for offloading the speculative prefill draft model (none = don't offload)\n"
+        "use --list-devices to see a list of available devices",
+        [](common_params & params, const std::string & value) {
+            params.speculative.prefill.devices = parse_device_list(value);
+            params.speculative.prefill.enabled = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_DEVICE"));
+    add_opt(common_arg(
+        {"--spec-prefill-draft-ctx", "--spec-prefill-ctx", "--spec-prefill-ctx-size", "--spec-prefill-max-ctx", "-cpd", "--speculative-prefill-ctx", "--speculative-prefill-max-ctx"}, "N",
+        string_format("context size for speculative prefill draft model (default: %d, 0 = draft training limit or main context)", params.speculative.prefill.n_ctx),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("spec-prefill context size must be >= 0");
+            }
+            params.speculative.prefill.n_ctx   = value;
+            params.speculative.prefill.enabled = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_CTX_SIZE"));
+    add_opt(common_arg(
+        {"--spec-prefill-p", "--spec-prefill-percentage"}, "P",
+        string_format("fraction of prompt tokens to retain during speculative prefill (default: %.2f)", (double) params.speculative.prefill.percentage),
+        [](common_params & params, const std::string & value) {
+            const float val = std::stof(value);
+            if (val <= 0.0f || val > 1.0f) {
+                throw std::invalid_argument("spec-prefill percentage must be between 0.0 (exclusive) and 1.0 (inclusive)");
+            }
+            params.speculative.prefill.enabled    = true;
+            params.speculative.prefill.percentage = val;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_P"));
+    add_opt(common_arg(
+        {"--spec-prefill-chunk", "--spec-prefill-chunk-size"}, "N",
+        string_format("chunk grouping size for speculative prefill (default: %d, 0 to disable)", params.speculative.prefill.chunk_size),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("spec-prefill chunk size must be >= 0");
+            }
+            params.speculative.prefill.chunk_size = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-prefill-lookahead", "--spec-prefill-lah"}, "N",
+        string_format("number of lookahead decode steps on draft model for attention estimation (default: %d)", params.speculative.prefill.look_ahead_cnt),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("spec-prefill lookahead count must be >= 1");
+            }
+            params.speculative.prefill.look_ahead_cnt = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-prefill-pool-kernel"}, "N",
+        string_format("1D average pooling kernel size for attention smoothing (default: %d, 0 to disable)", params.speculative.prefill.pool_kernel_size),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("spec-prefill pool kernel size must be >= 0");
+            }
+            params.speculative.prefill.pool_kernel_size = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
         [](common_params & params, const std::string & value) {
             if (value == "none") {
                 params.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
