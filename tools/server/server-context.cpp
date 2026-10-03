@@ -9,6 +9,7 @@
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
+#include "speculative-prefill.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
@@ -57,6 +58,18 @@ struct server_slot {
     mtmd_context * mctx = nullptr;
 
     common_speculative * spec = nullptr;
+
+    // speculative prefill state (filled once per prompt at SLOT_STATE_STARTED)
+    bool          spec_prefill_active = false;
+    server_tokens spec_prefill_tokens;
+
+    // number of prompt tokens this slot will actually process this round
+    int32_t n_prompt_in() const {
+        if (spec_prefill_active) {
+            return (int32_t) spec_prefill_tokens.size();
+        }
+        return task ? task->n_tokens() : 0;
+    }
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -182,6 +195,10 @@ struct server_slot {
         generated_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
+
+        // clear speculative prefill state
+        spec_prefill_active = false;
+        spec_prefill_tokens.clear();
 
         // clear speculative decoding stats
         n_draft_total = 0;
@@ -563,6 +580,12 @@ private:
 
     llama_model_ptr model_dft;
 
+    // speculative prefill: dedicated draft model/context/sampler (shared across slots)
+    llama_model_ptr    model_spf;
+    llama_context_ptr  ctx_spf;
+    common_sampler_ptr smpl_spf;
+    bool               cross_family_spf = false;
+
     bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
@@ -690,6 +713,52 @@ private:
             params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
         }
 
+        // dedicated speculative-prefill draft context: standard (non-flash) attention so the
+        // kq_soft_max tensors can be captured for importance estimation
+        if (params_base.speculative.prefill.enabled) {
+            if (!params_base.speculative.has_dft()) {
+                SRV_ERR("%s\n", "speculative prefill enabled but no draft model (-md ...) was provided - disabling");
+                params_base.speculative.prefill.enabled = false;
+            } else {
+                common_params params_spf = params_base;
+                params_spf.n_parallel   = 1;
+                params_spf.n_ctx        = params_base.speculative.prefill.n_ctx > 0
+                                            ? params_base.speculative.prefill.n_ctx
+                                            : std::min<uint32_t>(llama_n_ctx_seq(ctx), llama_model_n_ctx_train(model_dft.get()));
+                params_spf.n_batch      = params_base.n_batch;
+                params_spf.devices      = params_base.speculative.prefill.devices;
+                params_spf.model        = params_base.speculative.mparams_dft;
+                params_spf.n_gpu_layers = params_base.speculative.prefill.n_gpu_layers != -1
+                                            ? params_base.speculative.prefill.n_gpu_layers
+                                            : params_base.speculative.n_gpu_layers;
+                params_spf.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+
+                auto mparams_spf = common_model_params_to_llama(params_spf);
+                model_spf.reset(llama_model_load_from_file(params_spf.model.path.c_str(), mparams_spf));
+                if (model_spf == nullptr) {
+                    SRV_ERR("%s\n", "failed to load speculative prefill draft model - disabling");
+                    params_base.speculative.prefill.enabled = false;
+                } else {
+                    ctx_spf.reset(llama_init_from_model(model_spf.get(), common_context_params_to_llama(params_spf)));
+                    if (ctx_spf == nullptr) {
+                        SRV_ERR("%s\n", "failed to create speculative prefill draft context - disabling");
+                        params_base.speculative.prefill.enabled = false;
+                    } else {
+                        common_params_sampling sparams_spf;
+                        sparams_spf.temp = 0.0f; // importance estimation only - greedy
+                        smpl_spf.reset(common_sampler_init(model_spf.get(), sparams_spf));
+
+                        const int n_vocab_tgt = llama_vocab_n_tokens(vocab);
+                        const int n_vocab_spf = llama_vocab_n_tokens(llama_model_get_vocab(model_spf.get()));
+                        cross_family_spf = std::abs(n_vocab_tgt - n_vocab_spf) > 128;
+                        SRV_INF("speculative prefill ready (draft '%s', ctx %d, %s)\n",
+                                params_spf.model.path.c_str(), (int) llama_n_ctx(ctx_spf.get()),
+                                cross_family_spf ? "cross-family" : "same-family");
+                    }
+                }
+            }
+        }
+
         std::string & mmproj_path = params_base.mmproj.path;
         if (!mmproj_path.empty()) {
             if (!is_resume) {
@@ -764,7 +833,12 @@ private:
 
         slots.clear();
 
-        const bool can_spec = common_speculative_is_compat(ctx);
+        // with --spec-prefill the draft model (-md) is reserved for prompt compression;
+        // decode speculation stays off unless a spec type was requested explicitly
+        const bool prefill_only = params_base.speculative.prefill.enabled
+            && params_base.speculative.type == COMMON_SPECULATIVE_TYPE_NONE;
+
+        const bool can_spec = !prefill_only && common_speculative_is_compat(ctx);
         if (!can_spec) {
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
         }
@@ -1983,6 +2057,64 @@ private:
         }
     }
 
+    // run the prefill draft on a new prompt and keep the important subset for this slot
+    void apply_spec_prefill(server_slot & slot) {
+        slot.spec_prefill_active = false;
+        slot.spec_prefill_tokens.clear();
+
+        if (!ctx_spf || !smpl_spf || !params_base.speculative.prefill.enabled) {
+            return;
+        }
+
+        if (slot.task->tokens.has_mtmd) {
+            return; // speculative prefill is text-only
+        }
+
+        const llama_tokens & toks = slot.task->tokens.get_text_tokens();
+
+        if ((int32_t) toks.size() + params_base.speculative.prefill.look_ahead_cnt > (int32_t) llama_n_ctx(ctx_spf.get())) {
+            SLT_INF(slot, "prompt (%d tokens) exceeds speculative prefill draft context (%d) - keeping full prompt\n",
+                    (int32_t) toks.size(), llama_n_ctx(ctx_spf.get()));
+            return;
+        }
+
+        const auto t_spf_start = ggml_time_us();
+
+        common_speculative_prefill_result res;
+        if (cross_family_spf) {
+            std::string text;
+            text.reserve(toks.size() * 4);
+            for (auto t : toks) {
+                text += common_token_to_piece(vocab, t);
+            }
+            res = common_speculative_prefill_execute_cross(ctx_spf.get(), smpl_spf.get(), text, vocab, toks, 0,
+                    params_base.speculative.prefill);
+        } else {
+            res = common_speculative_prefill_execute(ctx_spf.get(), smpl_spf.get(), toks, 0,
+                    params_base.speculative.prefill);
+        }
+
+        // the draft context is scratch space (always seq 0) - drop its kv after use
+        llama_memory_seq_rm(llama_get_memory(ctx_spf.get()), 0, -1, -1);
+
+        if ((int32_t) res.kept_indices.size() >= (int32_t) toks.size()) {
+            return; // kept everything - nothing to skip
+        }
+
+        llama_tokens kept;
+        kept.reserve(res.kept_indices.size());
+        for (auto idx : res.kept_indices) {
+            kept.push_back(toks[idx]);
+        }
+        slot.spec_prefill_tokens = server_tokens(std::move(kept), false);
+        slot.spec_prefill_active = true;
+
+        SLT_INF(slot, "speculative prefill kept %d / %d tokens (%.1f%%) in %.2f s\n",
+                res.n_prompt_kept, res.n_prompt_orig,
+                100.0f * res.n_prompt_kept / std::max(1, res.n_prompt_orig),
+                (ggml_time_us() - t_spf_start) / 1e6);
+    }
+
     void update_slots() {
         // check if all slots are idle
         {
@@ -2179,7 +2311,13 @@ private:
 
                 // this slot still has a prompt to be processed
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
-                    const auto & input_tokens = slot.task->tokens;
+                    if (slot.state == SLOT_STATE_STARTED) {
+                        apply_spec_prefill(slot);
+                    }
+
+                    const auto & input_tokens = slot.spec_prefill_active
+                        ? slot.spec_prefill_tokens
+                        : slot.task->tokens;
 
                     // used to determine the number of tokens added to the batch for the current slot
                     const auto n_tokens_prev = batch.n_tokens;
@@ -2523,7 +2661,7 @@ private:
                     bool has_mtmd = false;
 
                     // check if we should process the image
-                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
+                    while (slot.prompt.n_tokens() < slot.n_prompt_in() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
                         // process the image
                         size_t n_tokens_out = 0;
                         int32_t res = input_tokens.process_chunk(ctx, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
@@ -2546,7 +2684,7 @@ private:
                     }
 
                     // add prompt tokens for processing in the current batch
-                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.n_tokens < n_batch) {
+                    while (slot.prompt.n_tokens() < slot.n_prompt_in() && batch.n_tokens < n_batch) {
                         // get next token to process
                         llama_token cur_tok = input_tokens[slot.prompt.n_tokens()];
                         if (cur_tok == LLAMA_TOKEN_NULL) {
@@ -2582,7 +2720,7 @@ private:
                             bool should_break = false;
                             for (int offset : checkpoint_offsets) {
                                 const int n_last = std::min(n_batch, offset);
-                                if (slot.task->n_tokens() == slot.prompt.n_tokens() + n_last) {
+                                if (slot.n_prompt_in() == slot.prompt.n_tokens() + n_last) {
                                     should_break = true;
                                     break;
                                 }
@@ -2597,7 +2735,7 @@ private:
                     const auto n_tokens_cur = batch.n_tokens - n_tokens_prev;
 
                     // entire prompt has been processed
-                    if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
+                    if (slot.prompt.n_tokens() == slot.n_prompt_in()) {
                         slot.state = SLOT_STATE_DONE_PROMPT;
 
                         GGML_ASSERT(batch.n_tokens > 0);
@@ -2611,7 +2749,7 @@ private:
                         slot.init_sampler();
                         SLT_INF(slot, "prompt processing done, n_tokens = %d, batch.n_tokens = %d\n", slot.prompt.n_tokens(), batch.n_tokens);
                     } else {
-                        if (slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch) {
+                        if (slot.n_prompt_in() < slot.prompt.n_tokens() + n_ubatch) {
                             // near the end of the prompt
                             do_checkpoint = do_checkpoint && true;
                         } else {
@@ -2632,7 +2770,7 @@ private:
                             }
                         }
 
-                        SLT_INF(slot, "prompt processing progress, n_tokens = %d, batch.n_tokens = %d, progress = %f\n", slot.prompt.n_tokens(), batch.n_tokens, (float) slot.prompt.n_tokens() / slot.task->n_tokens());
+                        SLT_INF(slot, "prompt processing progress, n_tokens = %d, batch.n_tokens = %d, progress = %f\n", slot.prompt.n_tokens(), batch.n_tokens, (float) slot.prompt.n_tokens() / slot.n_prompt_in());
                     }
 
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);

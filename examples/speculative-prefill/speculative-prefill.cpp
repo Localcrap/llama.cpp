@@ -29,11 +29,12 @@ int main(int argc, char ** argv) {
     }
 
     common_params_model dft_model = params.speculative.prefill.model;
-    if (dft_model.empty()) {
-        dft_model = params.speculative.draft.mparams;
+    auto model_empty = [](const common_params_model & m) { return m.path.empty() && m.hf_repo.empty(); };
+    if (model_empty(dft_model)) {
+        dft_model = params.speculative.mparams_dft;
     }
 
-    if (dft_model.empty()) {
+    if (model_empty(dft_model)) {
         LOG_ERR("%s: draft model is required for speculative prefill (specify with -mpd, --spec-prefill-model, or -md)\n", __func__);
         return 1;
     }
@@ -62,7 +63,7 @@ int main(int argc, char ** argv) {
 
     // load draft model with standard attention to allow attention extraction
     LOG_INF("%s: loading draft model...\n", __func__);
-    common_params params_dft = common_base_params_to_speculative(params);
+    common_params params_dft = params;
     params_dft.model = dft_model;
     if (params.speculative.prefill.n_ctx > 0) {
         params_dft.n_ctx = params.speculative.prefill.n_ctx;
@@ -72,19 +73,20 @@ int main(int argc, char ** argv) {
     }
     if (!params.speculative.prefill.devices.empty()) {
         params_dft.devices = params.speculative.prefill.devices;
-    } else if (!params.speculative.draft.devices.empty()) {
-        params_dft.devices = params.speculative.draft.devices;
+    } else if (!params.speculative.devices.empty()) {
+        params_dft.devices = params.speculative.devices;
     }
     params_dft.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED; // standard attention needed to capture kq_soft_max weights
 
-    auto init_dft = common_init_from_params(params_dft, /*model_only=*/true);
+    auto init_dft = common_init_from_params(params_dft);
     if (!init_dft) {
         LOG_ERR("%s: failed to load draft model\n", __func__);
         return 1;
     }
 
     llama_model * model_dft = init_dft->model();
-    if (!model_dft) {
+    llama_context * ctx_dft = init_dft->context();
+    if (!model_dft || !ctx_dft) {
         LOG_ERR("%s: failed to load draft model\n", __func__);
         return 1;
     }
@@ -94,43 +96,24 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (llama_model_target_layer_ids_n(model_dft) > 0) {
-        LOG_ERR("%s: draft model '%s' is target-dependent and cannot be used for speculative prefill\n", __func__, dft_model.path.c_str());
-        return 1;
-    }
-
-    if (params.speculative.prefill.n_ctx <= 0 && params_dft.n_ctx > (int32_t) llama_model_n_ctx_train(model_dft)) {
-        params_dft.n_ctx = llama_model_n_ctx_train(model_dft);
-        LOG_INF("%s: capping speculative prefill draft context to training limit (%d tokens)\n", __func__, params_dft.n_ctx);
-    }
-
-    llama_context_params cparams_dft = common_context_params_to_llama(params_dft);
-    llama_context_ptr ctx_dft_own(llama_init_from_model(model_dft, cparams_dft));
-    llama_context * ctx_dft = ctx_dft_own.get();
-    if (!ctx_dft) {
-        LOG_ERR("%s: failed to create draft context\n", __func__);
-        return 1;
-    }
-
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
-    if (llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
-        (llama_vocab_get_add_bos(vocab_tgt) && llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft))) {
-        LOG_ERR("%s: draft model bos tokens must match target model. add: %d - %d, id: %d - %d\n",
-                __func__,
-                llama_vocab_get_add_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_dft),
-                llama_vocab_bos(vocab_tgt), llama_vocab_bos(vocab_dft));
-        return 1;
-    }
-
+    bool cross_family = false;
     {
         const int n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
         const int n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
         const int vocab_diff  = n_vocab_tgt > n_vocab_dft ? n_vocab_tgt - n_vocab_dft : n_vocab_dft - n_vocab_tgt;
-        if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
-            LOG_ERR("%s: target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
-                    __func__, n_vocab_tgt, n_vocab_dft, vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
+        cross_family = vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE;
+        if (cross_family) {
+            LOG_INF("%s: draft vocab %d differs from target vocab %d - using cross-family importance mapping\n",
+                    __func__, n_vocab_dft, n_vocab_tgt);
+        } else if (llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+                (llama_vocab_get_add_bos(vocab_tgt) && llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft))) {
+            LOG_ERR("%s: draft model bos tokens must match target model. add: %d - %d, id: %d - %d\n",
+                    __func__,
+                    llama_vocab_get_add_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_dft),
+                    llama_vocab_bos(vocab_tgt), llama_vocab_bos(vocab_dft));
             return 1;
         }
     }
@@ -154,20 +137,46 @@ int main(int argc, char ** argv) {
 
     llama_seq_id seq_id = 0;
 
+    // warm up the target context so the sparse prefill below is not polluted by
+    // one-time kernel loading costs (mirrors what llama-server does at startup)
+    {
+        llama_batch warm = llama_batch_init(1, 0, 1);
+        common_batch_add(warm, prompt_tokens[0], 0, { seq_id }, true);
+        if (llama_decode(ctx_tgt, warm)) {
+            LOG_ERR("%s: target warmup decode failed\n", __func__);
+            llama_batch_free(warm);
+            return 1;
+        }
+        llama_synchronize(ctx_tgt);
+        llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, -1, -1);
+        llama_batch_free(warm);
+    }
+
     // initialize draft sampler for lookahead steps
     common_params_sampling sparams_dft = params.sampling;
     sparams_dft.temp = 0.0f;
     common_sampler_ptr smpl_dft(common_sampler_init(model_dft, sparams_dft));
 
+    // warm up the draft context as well
+    {
+        llama_batch warm = llama_batch_init(1, 0, 1);
+        common_batch_add(warm, prompt_tokens[0], 0, { seq_id }, true);
+        if (llama_decode(ctx_dft, warm)) {
+            LOG_ERR("%s: draft warmup decode failed\n", __func__);
+            llama_batch_free(warm);
+            return 1;
+        }
+        llama_synchronize(ctx_dft);
+        llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, -1, -1);
+        llama_batch_free(warm);
+    }
+
     // step 1: run speculative prefill on draft model
     const auto t_spec_prefill_start = ggml_time_us();
 
-    common_speculative_prefill_result spec_res = common_speculative_prefill_execute(
-        ctx_dft,
-        smpl_dft.get(),
-        prompt_tokens,
-        seq_id,
-        params.speculative.prefill);
+    common_speculative_prefill_result spec_res = cross_family
+        ? common_speculative_prefill_execute_cross(ctx_dft, smpl_dft.get(), params.prompt, vocab_tgt, prompt_tokens, seq_id, params.speculative.prefill)
+        : common_speculative_prefill_execute(ctx_dft, smpl_dft.get(), prompt_tokens, seq_id, params.speculative.prefill);
 
     LOG_INF("%s: speculative prefill kept %d / %d tokens (%.1f%%)\n",
             __func__,

@@ -554,6 +554,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_INDEXER_ATTN_K,                         "blk.%d.indexer.attn_k" },
     { LLM_TENSOR_INDEXER_ATTN_Q_B,                       "blk.%d.indexer.attn_q_b" },
     { LLM_TENSOR_INDEXER_KPOOL_APE,                      "blk.%d.indexer.kpool_ape" },
+    { LLM_TENSOR_INDEXER_COMPRESSOR_APE,                 "blk.%d.indexer_compressor_ape" },
+    { LLM_TENSOR_INDEXER_COMPRESSOR_GATE,                "blk.%d.indexer_compressor_gate" },
     { LLM_TENSOR_INDEXER_KPOOL_GATE,                     "blk.%d.indexer.kpool_gate" },
     { LLM_TENSOR_HC_ATTN_FN,                             "blk.%d.hc_attn_fn" },
     { LLM_TENSOR_HC_ATTN_BASE,                           "blk.%d.hc_attn_base" },
@@ -2562,6 +2564,8 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_INDEXER_ATTN_K,
                 LLM_TENSOR_INDEXER_ATTN_Q_B,
                 LLM_TENSOR_INDEXER_KPOOL_APE,
+                LLM_TENSOR_INDEXER_COMPRESSOR_APE,
+                LLM_TENSOR_INDEXER_COMPRESSOR_GATE,
                 LLM_TENSOR_INDEXER_KPOOL_GATE,
                 // Dense FFN (first 3 layers)
                 LLM_TENSOR_FFN_GATE,
@@ -2891,6 +2895,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_INDEXER_ATTN_K,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_ATTN_Q_B,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_KPOOL_APE,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_INDEXER_COMPRESSOR_APE,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_INDEXER_COMPRESSOR_GATE,    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_INDEXER_KPOOL_GATE,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     // mHC. `fn` is a matmul; `base` and `scale` are elementwise parameters of the
     // Sinkhorn-normalised mixing, applied inside the fused op.

@@ -1311,6 +1311,14 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
 
 void llama_model_loader::done_getting_tensors() const {
     if (n_created != n_tensors) {
+        int n_comp = 0;
+        for (const auto & kv : weights_map) {
+            if (kv.first.find("compressor") != std::string::npos) {
+                if (n_comp < 4) LLAMA_LOG_WARN("%s: DEBUG compressor key: '%s'\n", __func__, kv.first.c_str());
+                n_comp++;
+            }
+        }
+        LLAMA_LOG_WARN("%s: DEBUG n_created=%d n_tensors=%d map_compressor=%d\n", __func__, n_created, n_tensors, n_comp);
         throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
     }
     if (n_tensors_moved > 0) {

@@ -7229,6 +7229,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.indexer_attn_q_b   = create_tensor(tn(LLM_TENSOR_INDEXER_ATTN_Q_B,   "weight", i), {q_lora, (int64_t) hparams.indexer_n_head * idx_h}, TENSOR_NOT_REQUIRED);
                         layer.indexer_kpool_ape  = create_tensor(tn(LLM_TENSOR_INDEXER_KPOOL_APE, i), {idx_h, 4}, TENSOR_NOT_REQUIRED);
                         layer.indexer_kpool_gate = create_tensor(tn(LLM_TENSOR_INDEXER_KPOOL_GATE, i), {n_embd, idx_h}, TENSOR_NOT_REQUIRED);
+                        if (!layer.indexer_kpool_ape)  layer.indexer_kpool_ape  = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_APE,  "weight", i), {idx_h, 4}, TENSOR_NOT_REQUIRED);
+                        if (!layer.indexer_kpool_gate) layer.indexer_kpool_gate = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_GATE, "weight", i), {n_embd, idx_h}, TENSOR_NOT_REQUIRED);
 
                         layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, 0);
                         layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, 0);
@@ -7267,12 +7269,20 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         // streams left to mix. Creating them for layer 45 as required tensors is
                         // what "missing tensor 'blk.45.hc_attn_fn'" was.
                         if (i < (int) n_mtp_start) {
-                            layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN, i), {hc*n_embd, n_hc_mix}, 0);
-                            layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE, i), {n_hc_mix}, 0);
-                            layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, i), {3}, 0);
-                            layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN, i), {hc*n_embd, n_hc_mix}, 0);
-                            layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE, i), {n_hc_mix}, 0);
-                            layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE, i), {3}, 0);
+                            // mHC gates: the fork's conversion writes them bare, the
+                            // unsloth/mainline conversion appends ".weight" - accept both
+                            layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN, i),    {hc*n_embd, n_hc_mix}, TENSOR_NOT_REQUIRED);
+                            layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE, i),  {n_hc_mix}, TENSOR_NOT_REQUIRED);
+                            layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, i), {3}, TENSOR_NOT_REQUIRED);
+                            layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN, i),     {hc*n_embd, n_hc_mix}, TENSOR_NOT_REQUIRED);
+                            layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE, i),   {n_hc_mix}, TENSOR_NOT_REQUIRED);
+                            layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE, i),  {3}, TENSOR_NOT_REQUIRED);
+                            if (!layer.hc_attn_fn)    layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN, "weight", i),    {hc*n_embd, n_hc_mix}, 0);
+                            if (!layer.hc_attn_base)  layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE, "weight", i),  {n_hc_mix}, 0);
+                            if (!layer.hc_attn_scale) layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, "weight", i), {3}, 0);
+                            if (!layer.hc_ffn_fn)     layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN, "weight", i),     {hc*n_embd, n_hc_mix}, 0);
+                            if (!layer.hc_ffn_base)   layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE, "weight", i),   {n_hc_mix}, 0);
+                            if (!layer.hc_ffn_scale)  layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE, "weight", i),  {3}, 0);
                         }
 
                         if (hparams.is_recurrent(i)) {
@@ -7335,6 +7345,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.indexer_attn_q_b   = create_tensor(tn(LLM_TENSOR_INDEXER_ATTN_Q_B,   "weight", i), {q_lora, (int64_t) hparams.indexer_n_head * idx_h}, TENSOR_NOT_REQUIRED);
                             layer.indexer_kpool_ape  = create_tensor(tn(LLM_TENSOR_INDEXER_KPOOL_APE, i), {idx_h, 4}, TENSOR_NOT_REQUIRED);
                             layer.indexer_kpool_gate = create_tensor(tn(LLM_TENSOR_INDEXER_KPOOL_GATE, i), {n_embd, idx_h}, TENSOR_NOT_REQUIRED);
+                            std::string dbg_ape = tn(LLM_TENSOR_INDEXER_COMPRESSOR_APE,  "weight", i).str();
+                            if (!layer.indexer_kpool_ape)  layer.indexer_kpool_ape  = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_APE,  "weight", i), {idx_h, 4}, TENSOR_NOT_REQUIRED);
+                            if (!layer.indexer_kpool_gate) layer.indexer_kpool_gate = create_tensor(tn(LLM_TENSOR_INDEXER_COMPRESSOR_GATE, "weight", i), {n_embd, idx_h}, TENSOR_NOT_REQUIRED);
+                            if (i == 3) LLAMA_LOG_WARN("%s: DEBUG blk.3 compressor: name='%s' ape=%p gate=%p idx_h=%d\n", __func__,
+                                    dbg_ape.c_str(), (void*) layer.indexer_kpool_ape, (void*) layer.indexer_kpool_gate, (int) idx_h);
                         }
 
                         if (i < (int) hparams.n_layer_dense_lead) {

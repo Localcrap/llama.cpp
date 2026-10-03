@@ -35,3 +35,16 @@ common_speculative_prefill_result common_speculative_prefill_execute(
     const std::vector<llama_token> & prompt,
     llama_seq_id seq_id,
     const common_params_speculative_prefill & params);
+
+// cross-family variant: the draft tokenizes `text` with its own vocabulary, estimates
+// token importance there, and maps the kept spans onto `prompt_tgt` (target token ids)
+// via character overlap. importance transfers across model families and tokenizers
+// (arXiv 2603.02631)
+common_speculative_prefill_result common_speculative_prefill_execute_cross(
+    llama_context * ctx_dft,
+    common_sampler * smpl_dft,
+    const std::string & text,
+    const llama_vocab * vocab_tgt,
+    const std::vector<llama_token> & prompt_tgt,
+    llama_seq_id seq_id,
+    const common_params_speculative_prefill & params);

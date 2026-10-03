@@ -369,7 +369,6 @@ struct common_params_speculative {
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
 
     common_params_speculative_prefill prefill;
-    common_params_speculative_prefill prefill;
 
     bool has_dft() const {
         return !mparams_dft.path.empty() || !mparams_dft.hf_repo.empty();

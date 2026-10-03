@@ -73,6 +73,9 @@ struct common_arg {
 
     common_arg & set_examples(std::initializer_list<enum llama_example> examples);
     common_arg & set_excludes(std::initializer_list<enum llama_example> excludes);
+    common_arg & set_spec() {
+        return set_examples({LLAMA_EXAMPLE_SPECULATIVE});
+    }
     common_arg & set_env(const char * env);
     common_arg & set_sparam();
     common_arg & set_preset_only();

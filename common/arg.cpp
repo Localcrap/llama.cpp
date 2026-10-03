@@ -3500,6 +3500,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--spec-type"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]",
         string_format("type of speculative decoding to use when no draft model is provided (default: %s)\n",
             common_speculative_type_to_str(params.speculative.type).c_str()),
+        [](common_params & params, const std::string & value) {
+            if (value == "none") {
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
+            } else if (value == "ngram-cache") {
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_CACHE;
+            } else if (value == "ngram-simple") {
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE;
+            } else if (value == "ngram-map-k") {
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K;
+            } else if (value == "ngram-map-k4v") {
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
+            } else if (value == "ngram-mod") {
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+            } else {
+                throw std::invalid_argument("unknown speculative decoding type without draft model");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SPEC_TYPE"));
+    add_opt(common_arg(
         {"--spec-prefill", "--speculative-prefill"},
         "enable speculative prefill using draft model to filter prompt tokens",
         [](common_params & params) {
@@ -3604,24 +3623,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.prefill.pool_kernel_size = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
-        [](common_params & params, const std::string & value) {
-            if (value == "none") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
-            } else if (value == "ngram-cache") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_CACHE;
-            } else if (value == "ngram-simple") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE;
-            } else if (value == "ngram-map-k") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K;
-            } else if (value == "ngram-map-k4v") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
-            } else if (value == "ngram-mod") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
-            } else {
-                throw std::invalid_argument("unknown speculative decoding type without draft model");
-            }
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SPEC_TYPE"));
     add_opt(common_arg(
         {"--spec-ngram-size-n"}, "N",
         string_format("ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)", params.speculative.ngram_size_n),
