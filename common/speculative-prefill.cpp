@@ -234,29 +234,27 @@ common_speculative_prefill_result common_speculative_prefill_execute(
     // 1. evaluate full prompt on draft model
     {
         const int32_t n_batch_dft = llama_n_batch(ctx_dft);
-        llama_batch batch_prompt = llama_batch_init(std::min((int32_t) prompt.size(), n_batch_dft), 0, 1);
+        common_batch batch_prompt(ctx_dft);
 
         for (int32_t i = 0; i < (int32_t) prompt.size(); i += n_batch_dft) {
             const int32_t n_eval = std::min((int32_t) prompt.size() - i, n_batch_dft);
-            common_batch_clear(batch_prompt);
+            batch_prompt.clear();
 
             for (int32_t j = 0; j < n_eval; ++j) {
                 const int32_t idx = i + j;
                 const bool is_last = (idx == (int32_t) prompt.size() - 1);
-                common_batch_add(batch_prompt, prompt[idx], (llama_pos) idx, { seq_id }, is_last);
+                batch_prompt.add(prompt[idx], (llama_pos) idx, seq_id, is_last);
             }
 
-            const int ret = llama_decode(ctx_dft, batch_prompt);
+            const int ret = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_prompt.get());
             if (ret != 0) {
                 SPF_ERR("failed to decode prompt on draft model, ret = %d\n", ret);
-                llama_batch_free(batch_prompt);
                 res.kept_indices.resize(prompt.size());
                 std::iota(res.kept_indices.begin(), res.kept_indices.end(), 0);
                 res.n_prompt_kept = (int32_t) res.kept_indices.size();
                 return res;
             }
         }
-        llama_batch_free(batch_prompt);
     }
 
     const auto t_prefill_end = ggml_time_us();
@@ -271,7 +269,7 @@ common_speculative_prefill_result common_speculative_prefill_execute(
     // attach callback
     llama_set_eval_callback(ctx_dft, cb_collect_attn, &cb_data);
 
-    llama_batch batch_decode = llama_batch_init(1, 0, 1);
+    common_batch batch_decode(ctx_dft);
 
     int32_t actual_steps = 0;
     int32_t cur_pos = (int32_t) prompt.size();
@@ -286,10 +284,10 @@ common_speculative_prefill_result common_speculative_prefill_execute(
             break;
         }
 
-        common_batch_clear(batch_decode);
-        common_batch_add(batch_decode, token_id, cur_pos++, { seq_id }, true);
+        batch_decode.clear();
+        batch_decode.add(token_id, cur_pos++, seq_id, true);
 
-        const int ret = llama_decode(ctx_dft, batch_decode);
+        const int ret = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_decode.get());
         if (ret != 0) {
             SPF_ERR("failed lookahead decode step %d, ret = %d\n", k, ret);
             break;
@@ -308,8 +306,6 @@ common_speculative_prefill_result common_speculative_prefill_execute(
             actual_steps++;
         }
     }
-
-    llama_batch_free(batch_decode);
 
     // detach callback
     llama_set_eval_callback(ctx_dft, nullptr, nullptr);
@@ -332,6 +328,103 @@ common_speculative_prefill_result common_speculative_prefill_execute(
     res.kept_indices = common_speculative_prefill_select_indices(total_importance, params);
     res.n_prompt_kept = (int32_t) res.kept_indices.size();
     res.t_estimate_us = ggml_time_us() - t_est_start;
+
+    return res;
+}
+
+// cumulative character spans for each token of `toks`
+static std::vector<std::pair<size_t, size_t>> spf_token_spans(
+    const llama_vocab * vocab, const std::vector<llama_token> & toks) {
+    std::vector<std::pair<size_t, size_t>> spans;
+    spans.reserve(toks.size());
+    size_t off = 0;
+    std::vector<char> buf(512);
+    for (auto t : toks) {
+        int32_t n = llama_token_to_piece(vocab, t, buf.data(), (int32_t) buf.size(), 0, false);
+        if (n < 0) {
+            n = 0;
+        }
+        if ((size_t) n > buf.size()) {
+            buf.resize(n);
+            n = llama_token_to_piece(vocab, t, buf.data(), (int32_t) buf.size(), 0, false);
+            if (n < 0) {
+                n = 0;
+            }
+        }
+        spans.emplace_back(off, off + n);
+        off += n;
+    }
+    return spans;
+}
+
+common_speculative_prefill_result common_speculative_prefill_execute_cross(
+    llama_context * ctx_dft,
+    common_sampler * smpl_dft,
+    const std::string & text,
+    const llama_vocab * vocab_tgt,
+    const std::vector<llama_token> & prompt_tgt,
+    llama_seq_id seq_id,
+    const common_params_speculative_prefill & params) {
+    const llama_model * model_dft = llama_get_model(ctx_dft);
+    const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
+
+    std::vector<llama_token> prompt_dft = common_tokenize(ctx_dft, text, true, true);
+    if (prompt_dft.empty()) {
+        prompt_dft = prompt_tgt;
+    }
+
+    SPF_INF("cross-family: draft sees %d tokens for a %d token target prompt\n",
+            (int32_t) prompt_dft.size(), (int32_t) prompt_tgt.size());
+
+    common_speculative_prefill_result res = common_speculative_prefill_execute(ctx_dft, smpl_dft, prompt_dft, seq_id, params);
+
+    // resample the kept draft-token spans onto the target tokenization
+    const auto spans_dft = spf_token_spans(vocab_dft, prompt_dft);
+    const auto spans_tgt = spf_token_spans(vocab_tgt, prompt_tgt);
+
+    size_t len_dft = spans_dft.empty() ? 0 : spans_dft.back().second;
+    std::vector<bool> char_kept(len_dft, false);
+    for (int32_t idx : res.kept_indices) {
+        if (idx >= 0 && (size_t) idx < spans_dft.size()) {
+            for (size_t c = spans_dft[idx].first; c < spans_dft[idx].second && c < len_dft; ++c) {
+                char_kept[c] = true;
+            }
+        }
+    }
+
+    std::vector<int32_t> kept_tgt;
+    for (size_t i = 0; i < prompt_tgt.size(); ++i) {
+        if (spans_tgt[i].second <= spans_tgt[i].first) {
+            continue;
+        }
+        for (size_t c = spans_tgt[i].first; c < spans_tgt[i].second; ++c) {
+            if (c < len_dft && char_kept[c]) {
+                kept_tgt.push_back((int32_t) i);
+                break;
+            }
+        }
+    }
+
+    if (params.keep_bos && !prompt_tgt.empty()) {
+        kept_tgt.push_back(0);
+    }
+    if (params.keep_last && !prompt_tgt.empty()) {
+        kept_tgt.push_back((int32_t) prompt_tgt.size() - 1);
+    }
+
+    std::sort(kept_tgt.begin(), kept_tgt.end());
+    kept_tgt.erase(std::unique(kept_tgt.begin(), kept_tgt.end()), kept_tgt.end());
+
+    if (kept_tgt.size() < std::max<size_t>(8, prompt_tgt.size() / 100)) {
+        SPF_INF("cross-family mapping kept too little (%d of %d); keeping full prompt\n",
+                (int32_t) kept_tgt.size(), (int32_t) prompt_tgt.size());
+        kept_tgt.resize(prompt_tgt.size());
+        std::iota(kept_tgt.begin(), kept_tgt.end(), 0);
+    }
+
+    res.kept_indices = std::move(kept_tgt);
+    res.n_prompt_orig = (int32_t) prompt_tgt.size();
+    res.n_prompt_kept = (int32_t) res.kept_indices.size();
 
     return res;
 }

@@ -933,6 +933,7 @@ private:
     llama_model *   model_spf = nullptr;
     llama_context * ctx_spf   = nullptr;
     common_sampler_ptr smpl_spf;
+    bool               cross_family_spf = false;
 
     common_context_seq_rm_type ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     common_context_seq_rm_type ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
@@ -1071,8 +1072,19 @@ private:
         llama_memory_seq_rm(llama_get_memory(ctx_spf), slot.id, -1, -1);
         common_sampler_reset(smpl_spf.get());
 
-        const common_speculative_prefill_result res = common_speculative_prefill_execute(
-            ctx_spf, smpl_spf.get(), prompt, slot.id, params_base.speculative.prefill);
+        common_speculative_prefill_result res;
+        if (cross_family_spf) {
+            std::string text;
+            text.reserve(prompt.size() * 4);
+            for (auto t : prompt) {
+                text += common_token_to_piece(vocab, t);
+            }
+            res = common_speculative_prefill_execute_cross(ctx_spf, smpl_spf.get(), text, vocab, prompt, slot.id,
+                    params_base.speculative.prefill);
+        } else {
+            res = common_speculative_prefill_execute(
+                ctx_spf, smpl_spf.get(), prompt, slot.id, params_base.speculative.prefill);
+        }
 
         llama_memory_seq_rm(llama_get_memory(ctx_spf), slot.id, -1, -1);
 
@@ -1336,6 +1348,7 @@ private:
                 return false;
             }
 
+
             if (llama_model_is_recurrent(model_spf)) {
                 SRV_ERR("speculative prefill draft model '%s' is recurrent and not supported\n", params_spf.model.get_name().c_str());
                 return false;
@@ -1350,9 +1363,10 @@ private:
             const int n_vocab_tgt = llama_vocab_n_tokens(vocab);
             const int n_vocab_spf = llama_vocab_n_tokens(vocab_spf);
             const int vocab_diff  = n_vocab_tgt > n_vocab_spf ? n_vocab_tgt - n_vocab_spf : n_vocab_spf - n_vocab_tgt;
-            if (vocab_diff > 128) {
-                SRV_ERR("speculative prefill vocab size difference %d exceeds 128\n", vocab_diff);
-                return false;
+            cross_family_spf = vocab_diff > 128;
+            if (cross_family_spf) {
+                SRV_INF("speculative prefill draft vocab %d differs from target %d - cross-family importance mapping enabled\n",
+                        n_vocab_spf, n_vocab_tgt);
             }
 
             common_params_sampling sparams_spf;
