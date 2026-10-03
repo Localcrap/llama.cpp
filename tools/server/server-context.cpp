@@ -9,8 +9,6 @@
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
-#include "speculative-prefill.h"
-#include "src/llama-ext.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
@@ -59,9 +57,6 @@ struct server_slot {
     mtmd_context * mctx = nullptr;
 
     common_speculative * spec = nullptr;
-
-    bool spec_prefill_active = false;
-    server_tokens spec_prefill_tokens;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -314,10 +309,6 @@ struct server_slot {
             t_token_generation = (ggml_time_us() - t_start_generation) / 1e3;
 
             state = SLOT_STATE_IDLE;
-
-            if (ctx_spf) {
-                llama_memory_seq_rm(llama_get_memory(ctx_spf), id, -1, -1);
-            }
 
             // do not keep context of the child slots - the parent's context is enough
             if (task->is_child()) {
@@ -2188,13 +2179,7 @@ private:
 
                 // this slot still has a prompt to be processed
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
-                    if (slot.state == SLOT_STATE_STARTED) {
-                        slot.stats.update_prompt_start();
-                        apply_spec_prefill(slot);
-                    }
-
-                    const auto & input_tokens = slot.prompt_src();
-                    const int32_t n_prompt_in = slot.n_prompt_src();
+                    const auto & input_tokens = slot.task->tokens;
 
                     // used to determine the number of tokens added to the batch for the current slot
                     const auto n_tokens_prev = batch.n_tokens;
@@ -2244,39 +2229,39 @@ private:
                         }
 
                         if (!slot.can_split()) {
-                            if (n_prompt_in > n_ubatch) {
+                            if (slot.task->n_tokens() > n_ubatch) {
                                 send_error(slot,
                                            string_format(
                                                "input (%d tokens) is too large to process. increase the physical batch "
                                                "size (current batch size: %d)",
-                                               n_prompt_in, n_ubatch),
+                                               slot.task->n_tokens(), n_ubatch),
                                            ERROR_TYPE_SERVER);
                                 slot.release();
                                 continue;
                             }
 
-                            if (n_prompt_in > slot.n_ctx) {
+                            if (slot.task->n_tokens() > slot.n_ctx) {
                                 send_error(
                                     slot,
                                     string_format(
                                         "input (%d tokens) is larger than the max context size (%d tokens). skipping",
-                                        n_prompt_in, slot.n_ctx),
+                                        slot.task->n_tokens(), slot.n_ctx),
                                     ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                 slot.release();
                                 continue;
                             }
                         } else {
-                            if (n_prompt_in >= slot.n_ctx) {
+                            if (slot.task->n_tokens() >= slot.n_ctx) {
                                 send_error(slot,
                                            string_format("request (%d tokens) exceeds the available context size (%d "
                                                          "tokens), try increasing it",
-                                                         n_prompt_in, slot.n_ctx),
+                                                         slot.task->n_tokens(), slot.n_ctx),
                                            ERROR_TYPE_EXCEED_CONTEXT_SIZE);
                                 slot.release();
                                 continue;
                             }
 
-                            if (slot.task->params.cache_prompt && !slot.spec_prefill_active) {
+                            if (slot.task->params.cache_prompt) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
@@ -2465,8 +2450,8 @@ private:
                         }
 
                         // [TAG_PROMPT_LOGITS]
-                        if (n_past == n_prompt_in && n_past > 0) {
-                            SLT_WRN(slot, "need to evaluate at least 1 token for each active slot (n_past = %d, task.n_tokens() = %d)\n", n_past, n_prompt_in);
+                        if (n_past == slot.task->n_tokens() && n_past > 0) {
+                            SLT_WRN(slot, "need to evaluate at least 1 token for each active slot (n_past = %d, task.n_tokens() = %d)\n", n_past, slot.task->n_tokens());
                             n_past--;
                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
                         }
@@ -2597,7 +2582,7 @@ private:
                             bool should_break = false;
                             for (int offset : checkpoint_offsets) {
                                 const int n_last = std::min(n_batch, offset);
-                                if (n_prompt_in == slot.prompt.n_tokens() + n_last) {
+                                if (slot.task->n_tokens() == slot.prompt.n_tokens() + n_last) {
                                     should_break = true;
                                     break;
                                 }
@@ -2612,7 +2597,7 @@ private:
                     const auto n_tokens_cur = batch.n_tokens - n_tokens_prev;
 
                     // entire prompt has been processed
-                    if (slot.prompt.n_tokens() == n_prompt_in) {
+                    if (slot.prompt.n_tokens() == slot.task->n_tokens()) {
                         slot.state = SLOT_STATE_DONE_PROMPT;
 
                         GGML_ASSERT(batch.n_tokens > 0);
