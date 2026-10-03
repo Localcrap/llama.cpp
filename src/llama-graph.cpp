@@ -1853,7 +1853,7 @@ ggml_tensor * llm_graph_context::build_ffn(
                     const float limit = hparams.swiglu_clamp_shexp[il];
                     constexpr float eps = 1e-6f;
                     if (limit > eps) {
-                        if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0)) {
+                        if (arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_UNKNOWN && hparams.dsv4_hc_mult > 0)) {
                             cur = ggml_swiglu_clamp(ctx0, cur, tmp, limit);
                         } else {
                             tmp = ggml_clamp(ctx0, tmp, -limit, limit);
@@ -1946,7 +1946,7 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     if (down) {
         cur = build_lora_mm(down, cur);
-        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
+        if (arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_UNKNOWN) {
             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_prec_set_acc(cur, GGML_PREC_F32);
         }
@@ -2039,7 +2039,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * selected_experts_in) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
-    const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
+    const bool weight_before_ffn = arch == LLM_ARCH_UNKNOWN; // for llama4, we apply the sigmoid-ed weights before the FFN
 
     ggml_tensor * logits = nullptr;
 
@@ -2091,11 +2091,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     // llama4 doesn't have exp_probs_b, and sigmoid is only used after top_k
     // see: https://github.com/meta-llama/llama-models/blob/699a02993512fb36936b1b0741e13c06790bcf98/models/llama4/moe.py#L183-L198
-    if (arch == LLM_ARCH_LLAMA4) {
+    if (arch == LLM_ARCH_UNKNOWN) {
         selection_probs = logits;
     }
 
-    if (arch == LLM_ARCH_GROVEMOE) {
+    if (arch == LLM_ARCH_UNKNOWN) {
         selection_probs = ggml_sigmoid(ctx0, logits); // [n_expert, n_tokens]
         cb(selection_probs, "ffn_moe_probs_biased", il);
     }
@@ -2133,7 +2133,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
     cb(selected_experts, "ffn_moe_topk", il);
 
-    if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
+    if (arch == LLM_ARCH_UNKNOWN && n_expert != hparams.n_expert) {
         // TODO: Use scalar div instead when/if implemented
         ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
         selected_experts = ggml_cast(ctx0, ggml_scale(ctx0, f_sel, 1.0f / float(hparams.n_group_experts)), GGML_TYPE_I32);
@@ -2247,7 +2247,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                     const float limit = hparams.swiglu_clamp_exp[il];
                     constexpr float eps = 1e-6f;
                     if (limit > eps) {
-                        if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
+                        if (arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_UNKNOWN && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_UNKNOWN) {
                             cur = ggml_swiglu_clamp(ctx0, cur, up, limit);
                         } else {
                             up = ggml_clamp(ctx0, up, -limit, limit);
@@ -2324,7 +2324,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
-    if (arch == LLM_ARCH_MISTRAL4) {
+    if (arch == LLM_ARCH_UNKNOWN) {
         // src1 can exceed F16 range
         ggml_prec_set_src(experts, GGML_PREC_F32, 1);
     }
@@ -2700,7 +2700,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         //       while for some models F16 is enough, for others it is not, so we default to F32 here
         ggml_prec_set_acc(kq, GGML_PREC_F32);
 
-        if (arch == LLM_ARCH_GROK) {
+        if (arch == LLM_ARCH_UNKNOWN) {
             // need to do the following:
             // multiply by attn_output_multiplier
             // and then :
@@ -2938,7 +2938,7 @@ ggml_tensor * llm_graph_context::build_attn(
     }
 
     if (wo) {
-        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
+        if (arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_UNKNOWN) {
             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             cur = build_lora_mm(wo, cur);
             ggml_prec_set_acc(cur, GGML_PREC_F32);
@@ -3025,7 +3025,7 @@ ggml_tensor * llm_graph_context::build_attn(
     cb(cur, "kqv_out", il);
 
     if (wo) {
-        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
+        if (arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_UNKNOWN) {
             // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
             cur = build_lora_mm(wo, cur);
             ggml_prec_set_acc(cur, GGML_PREC_F32);
@@ -3777,7 +3777,7 @@ void llm_graph_context::build_pooling(
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
-                    if (arch == LLM_ARCH_MODERN_BERT) {
+                    if (arch == LLM_ARCH_UNKNOWN) {
                         cur = ggml_gelu(ctx0, cur);
                     } else {
                         cur = ggml_tanh(ctx0, cur);
@@ -3800,7 +3800,7 @@ void llm_graph_context::build_pooling(
                 }
 
                 // softmax for qwen3 reranker
-                if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_QWEN3VL) {
+                if (arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_UNKNOWN) {
                     cur = ggml_soft_max(ctx0, cur);
                 }
             } break;

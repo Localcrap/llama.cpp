@@ -1029,7 +1029,7 @@ size_t llama_batch_ext_select_n_embd_inp(llama_context_type ctx_type, llm_arch a
     if (ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
         return hparams.n_embd_out();
     }
-    if (arch == LLM_ARCH_DFLASH) {
+    if (arch == LLM_ARCH_UNKNOWN) {
         return hparams.n_embd_inp_enc();
     }
     return hparams.n_embd_inp();

@@ -325,8 +325,8 @@ llama_kv_cache::llama_kv_cache(
             hparams.n_embd_head_k() % 64 == 0;
 
         // always create Hadamard rotation tensors for DeepSeek lightning indexers
-        if ((model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_DEEPSEEK4 ||
-                model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_DOTS3NOTE) &&
+        if ((model.arch == LLM_ARCH_UNKNOWN || model.arch == LLM_ARCH_UNKNOWN ||
+                model.arch == LLM_ARCH_UNKNOWN || model.arch == LLM_ARCH_UNKNOWN) &&
                 hparams.n_embd_head_k_full == hparams.indexer_head_size) {
             attn_rot_k = true;
         }
@@ -1187,7 +1187,7 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 
 bool llama_kv_cache::get_can_shift() const {
     // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
-    if (model.arch == LLM_ARCH_STEP35) {
+    if (model.arch == LLM_ARCH_UNKNOWN) {
         return false;
     }
     if (hparams.n_pos_per_embd() > 1) {
