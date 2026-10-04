@@ -35,3 +35,28 @@ config: engine=GGML_CPU_TILED_MM=1, 2048 tok x 10 used, 12 threads
 | up/iq2_s | 227.4 | 3.4 | 756 | PASS |
 | up/iq4_xs | 240.8 | 5.3 | 713 | PASS |
 decision: (fill in)
+
+## 2026-10-04 M1 investigation notes (X1 rejected; VNNI-kernel status verified)
+
+- **X1 (activation staging hoist) REJECTED by arithmetic**: extending the
+  src1 tile from 256 to 4096 rows needs ~2.2 GiB per thread vs the 512 KiB
+  TILED_WS_SLOT. The alternative (re-unpack per (expert, k-window)) still
+  moves ~845 GiB of redundant q8 unpack per ubatch (44 experts x 8
+  windows x ~2.4 GiB). Net loss; do not attempt.
+- **VNNI kernel status**: the shipped libggml-cpu DOES run
+  tiled_run_micro_vnni_8x16 for the hot instantiations (64x vpdpbusd +
+  64x vpbroadcastd, fully unrolled, u32 loads hoisted to vmovq) - an
+  initial wrong-function disassembly suggested otherwise; corrected.
+  GGML_AVX512_VNNI=OFF in CMakeCache is cosmetic: -march=native defines
+  __AVX512VNNI__ and the VNNI path is live. The load-port cost model in
+  01-measured-baseline.md stands.
+- Baseline re-verified after the CMake flag flip (no change): up/iq2_xxs
+  221 ms, 2.8 GB/s, 776 GMAC/s. All goldens PASS.
+- A2 (8x32 microtile): register audit says 8x32 does NOT fit (40+ zmm);
+  8x20 (28 zmm) fits => only ~1.15x on the microkernel. The profitable
+  A-variant is therefore NOT A2 but "A2'": keep 8x16 tiles, restructure
+  the feed so weight bytes are loaded as vectors and broadcast once per
+  4 rows (see M2 fused prototype; this merges A into B).
+
+decision: M1's X1 dropped; A2 replaced by direct M2 work; M1 gate
+reinterpreted as M2's gate (see 03-milestones).
