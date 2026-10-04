@@ -5226,6 +5226,18 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             {
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
+                // Experts held in host memory: the scheduler would otherwise assign
+                // this op to the GPU and stage the entire weight tensor over PCIe
+                // before every invocation (per-ubatch for MoE weights). With
+                // GGML_CUDA_MMI_ON_CPU=1 the op is refused here and runs on the CPU
+                // backend where the weights live. Off by default: on a x4 PCIe link
+                // the staging can still beat the CPU tiled path for large batches.
+                if (op->op == GGML_OP_MUL_MAT_ID && a->buffer &&
+                        getenv("GGML_CUDA_MMI_ON_CPU") != nullptr &&
+                        !ggml_backend_buft_is_cuda(a->buffer->buft) &&
+                        !ggml_backend_buft_is_cuda_host(a->buffer->buft)) {
+                    return false;
+                }
                 if (a->nb[0] != ggml_element_size(a) || b->nb[0] != ggml_element_size(b)) {
                     return false; // TODO this could in principle be implemented though currently there is no use case.
                 }
