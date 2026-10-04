@@ -14,6 +14,12 @@
 #     a single ~3-4k-token prompt right after launch - it routes through all
 #     288 experts and makes them page-cache-resident (~20 s at 200+ t/s pp).
 #
+#   - MTP: the glm5-next NextN graph (implemented in this fork) enables in-model
+#     MTP self-drafting: --spec-type draft-mtp. Acceptance 0.83-0.94, warm tg
+#     15.4 t/s vs ~13-14 without. Costs +1 n-cpu-moe (blk.45 experts ~2.4 GiB)
+#     and -fit off (the VRAM-fit probe crashes on MTP contexts - known issue).
+#     Set MTP=off to serve without it.
+#
 # NOTE: shard 1 of this GGUF was repaired for mainline (arch 'glm5next' ->
 # 'glm5-next' + mainline-style kv keys); the original is saved as *.orig-arch.
 # Run this model with THIS branch - the patrickbdevaney fork mangles it.
@@ -24,10 +30,16 @@ SERVER_BIN="${SERVER_BIN:-/mnt/ssd/projects/llama.cpp/build-cuda/bin/llama-serve
 PORT="${PORT:-8084}"
 HOST="${HOST:-0.0.0.0}"          # 0.0.0.0 to reach it over tailscale/LAN
 CTX="${CTX:-32768}"
-N_CPU_MOE="${N_CPU_MOE:-39}"     # MoE layers with experts on CPU (43 total)
+MTP="${MTP:-on}"                 # in-model MTP self-drafting for decode
+N_CPU_MOE="${N_CPU_MOE:-41}"     # MoE layers with experts on CPU (43 total; 41 when MTP=on)
 T_DEC="${T_DEC:-12}"             # decode threads (physical-ish cores)
 T_PP="${T_PP:-16}"               # prefill threads
 UB="${UB:-2048}"                 # ubatch - biggest pp lever
+
+MTPARGS=()
+if [ "$MTP" = "on" ]; then
+  MTPARGS=(--spec-type draft-mtp -fit off)
+fi
 
 exec "$SERVER_BIN" \
     --model "$MODEL" \
@@ -42,4 +54,5 @@ exec "$SERVER_BIN" \
     --port "$PORT" \
     --threads "$T_DEC" \
     --threads-batch "$T_PP" \
+    "${MTPARGS[@]}" \
     "$@"
