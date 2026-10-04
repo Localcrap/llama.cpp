@@ -60,3 +60,19 @@ decision: (fill in)
 
 decision: M1's X1 dropped; A2 replaced by direct M2 work; M1 gate
 reinterpreted as M2's gate (see 03-milestones).
+
+## 2026-10-04 M2 fused prototype GATE: fail
+commit: 9fa732eac
+config: fused_bench.cpp, [2048 x 4096] iq2_xxs expert, 16 act rows, 1 core
+
+| metric | value | gate | note |
+|---|---|---|---|
+| GMAC/s (1 core) | 17.5 | >= 167 | ~10x short |
+| correctness | PASS | PASS | exact match vs scalar reference |
+
+decision: STOP per plan. Mechanism: ~1100 scalar ops per 256 weight
+values in the expansion (movzbl/movw-dominated profile); iq2_xxs's
+LUT code format cannot feed VNNI. Post-failure cards (codebook
+pre-expansion, operand swap, wider bands) all bounded below gate.
+The CPU path cannot beat streaming for this quant; project closed.
+See bench-moe-cpu/M2-VERDICT.md.
