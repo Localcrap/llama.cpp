@@ -187,9 +187,132 @@ void llama_model_glm5_next::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_glm5_next::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        throw std::runtime_error("GLM5-Next NextN graph not implemented yet");
+        return std::make_unique<graph_mtp>(*this, params);
     }
     return std::make_unique<graph>(*this, params);
+}
+
+// LLM_GRAPH_TYPE_DECODER_MTP draft head for the blk.45 NextN block:
+// eh_proj([hnorm(h), enorm(e)]) into one full DSA + MoE layer, shared LM head
+llama_model_glm5_next::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
+    graph(model, params, no_build{}) {
+    GGML_ASSERT(hparams.n_layer_nextn == 1 && "glm5-next MTP has a single NextN block");
+
+    const int il = hparams.n_layer();
+    const auto & layer = model.layers[il];
+
+    if (!layer.nextn.eh_proj || !layer.nextn.enorm || !layer.nextn.hnorm) {
+        throw std::runtime_error("glm5-next MTP: NextN tensors missing - the model must be loaded with MTP enabled");
+    }
+
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
+
+    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(inp->tokens);
+
+    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
+    ggml_set_input(inp->embd);
+
+    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+    ggml_set_input(inp->h);
+    ggml_set_name(inp->h, "mtp_h_input");
+
+    ggml_tensor * inp_h    = inp->h;
+    ggml_tensor * inp_tok  = inp->tokens;
+    ggml_tensor * inp_embd = inp->embd;
+
+    ggml_tensor * tok_embd;
+    if (ubatch.token) {
+        ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
+        tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp_tok);
+    } else {
+        tok_embd = inp_embd;
+    }
+    cb(tok_embd, "mtp_tok_embd", il);
+
+    res->add_input(std::move(inp));
+
+    // the NextN layer is a full-attention (DSA) layer: hybrid inputs + k-pool
+    auto * inp_hyb  = build_inp_mem_hybrid_k();
+    auto * inp_attn = inp_hyb->get_attn();
+    auto * inp_rs   = inp_hyb->get_recr();
+    const auto * mctx_hyb = static_cast<const llama_memory_hybrid_idx_context *>(mctx);
+
+    // no recurrent layer runs in the draft graph, but the input still has to be allocated
+    ggml_build_forward_expand(gf, inp_rs->s_copy);
+
+    auto * inp_kpool = build_inp_kpool(mctx_hyb);
+
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    // MTP glue: eh_proj([hnorm(h), enorm(e)]) - the NextN block has no mHC
+    ggml_tensor * h_norm = build_norm(inp_h, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
+    cb(h_norm, "mtp_hnorm", il);
+
+    ggml_tensor * e_norm = build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, il);
+    cb(e_norm, "mtp_enorm", il);
+
+    ggml_tensor * cat = ggml_concat(ctx0, e_norm, h_norm, 0);
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, cat);
+    cb(cur, "mtp_eh_proj", il);
+
+    // one plain DSA + MoE decoder layer (the NextN block carries no hc tensors)
+    ggml_tensor * prev_sel = nullptr;
+    {
+        ggml_tensor * inpSA = cur;
+
+        cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "mtp_attn_norm", il);
+        ggml_build_forward_expand(gf, cur);
+
+        cur = build_dsa_layer(cur, layer, mctx_hyb, inp_attn, inp_kpool, &prev_sel, il);
+        cur = ggml_add(ctx0, cur, inpSA);
+        cb(cur, "mtp_attn_out", il);
+
+        ggml_tensor * ffn_residual = cur;
+
+        cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "mtp_ffn_norm", il);
+
+        ggml_tensor * moe_out = build_moe_ffn(cur,
+                layer.ffn_gate_inp,
+                layer.ffn_up_exps,
+                layer.ffn_gate_exps,
+                layer.ffn_down_exps,
+                layer.ffn_exp_probs_b,
+                n_expert, n_expert_used,
+                LLM_FFN_SILU, hparams.expert_weights_norm,
+                hparams.expert_weights_scale,
+                (llama_expert_gating_func_type) hparams.expert_gating_func,
+                il);
+        cb(moe_out, "mtp_ffn_moe_out", il);
+
+        ggml_tensor * ffn_shexp = build_ffn(cur,
+                layer.ffn_up_shexp,   nullptr, nullptr,
+                layer.ffn_gate_shexp, nullptr, nullptr,
+                layer.ffn_down_shexp, nullptr, nullptr,
+                nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cb(ffn_shexp, "mtp_ffn_shexp", il);
+
+        cur = ggml_add(ctx0, ggml_add(ctx0, moe_out, ffn_shexp), ffn_residual);
+        cb(cur, "mtp_ffn_out", il);
+    }
+
+    // the post-norm state feeds the next draft step
+    cur = build_norm(cur, layer.nextn.shared_head_norm ? layer.nextn.shared_head_norm : model.output_norm,
+            nullptr, LLM_NORM_RMS, -1);
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
+
+    cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    cb(cur, "result_norm", -1);
+    res->t_embd = cur;
+
+    cur = ggml_mul_mat(ctx0, model.output, cur);
+    cb(cur, "result_output", -1);
+    res->t_logits = cur;
+
+    ggml_build_forward_expand(gf, cur);
 }
 
 // Causal conv1d over one of Q/K/V
@@ -545,6 +668,9 @@ ggml_tensor * llama_model_glm5_next::graph::build_hc_post(
 
     return out;
 }
+
+llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_params & params, no_build) :
+    llm_build_delta_net_base(params), model(model) {}
 
 llama_model_glm5_next::graph::graph(const llama_model & model, const llm_graph_params & params) :
     llm_build_delta_net_base(params), model(model) {

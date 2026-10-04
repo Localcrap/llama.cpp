@@ -655,6 +655,17 @@ struct llama_model_glm5_next : public llama_model_base {
                                       const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_attn_k * inp_attn,
                                       llm_graph_input_kpool * inp_kpool, ggml_tensor ** prev_sel, int il);
 
+        struct no_build {};
+
+        // base-init only, the graph body is built by the derived MTP head
+        graph(const llama_model & model, const llm_graph_params & params, no_build);
+
+    };
+
+    // MTP draft head: eh_proj([hnorm(h), enorm(e)]) fed into the NextN block
+    // (blk.45: one full DSA + MoE layer), output via the shared LM head
+    struct graph_mtp : public graph {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
