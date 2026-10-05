@@ -93,3 +93,26 @@ decision: 262144 ctx works at full warm speed with ncmoe 42 + MTP off +
 lazy off. Cold start costs ~2 warm-up passes (~3 min) after every boot.
 256k caveat: DSA indexer cost grows with n_past but is minor vs the
 expert streaming; measured warm pp matches 32k-era numbers.
+
+## 2026-10-05 correction: 256k pp numbers are workload-dependent (user caught it)
+
+commit: 8681c2e63+
+The "~212 t/s warm" figure is the fully-converged large-prompt best case
+only. The general per-request reality at 262144 ctx / ncmoe 43:
+
+| request | measured |
+|---|---|
+| small prompt (49-300 tok) | 8-17 s each => 6-20 t/s |
+| 7021-tok prompt, warming | 140 s -> 70 s (50-100 t/s) |
+| 7021-tok prompt, warm | 34 s => 204 t/s |
+| tg (no MTP) | 8-11 t/s |
+
+Why: every request streams ~87 GiB of experts over x4 (~12-13 s floor,
+nothing VRAM-resident at ncmoe 43), the 89 GiB expert set thrashes the
+page cache (89 > ~79 usable), and the DSA indexer/kpool work grows
+linearly with n_past (a 147-token chunk costs 13.9 s at n_past ~= 250k).
+
+decision: 256k ctx on this box is viable for warm batch processing of
+long documents, NOT for interactive small-prompt use (10-17 s per
+message). Interactive + long-context needs the memory budget problem
+solved (see 5800X dual-GPU analysis) or a smaller model.
