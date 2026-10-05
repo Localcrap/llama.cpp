@@ -76,3 +76,20 @@ LUT code format cannot feed VNNI. Post-failure cards (codebook
 pre-expansion, operand swap, wider bands) all bounded below gate.
 The CPU path cannot beat streaming for this quant; project closed.
 See bench-moe-cpu/M2-VERDICT.md.
+
+## 2026-10-05 256k-context serving config (user-run + verification)
+commit: 9fa732eac+ (launcher env: CTX=262144)
+config: ncmoe 42 (MTP off frees the VRAM for it), --lazy-mode off, -fit n/a
+
+| metric | value | note |
+|---|---|---|
+| VRAM | 23.6 GiB | ncmoe 42 fits only with MTP off (42+MTP OOM'd, confirmed) |
+| pp warm-up | 62.6 -> 135.7 -> 211.6 t/s | 3 passes to converge page cache |
+| pp warm | ~212 t/s | same as the 32k-era warm number |
+| tg | 12.6 t/s | MTP off; enable MTP when VRAM allows |
+| RAM | 10 used + 46 cache | eager load kept ~25 GiB off the page cache vs lazy |
+
+decision: 262144 ctx works at full warm speed with ncmoe 42 + MTP off +
+lazy off. Cold start costs ~2 warm-up passes (~3 min) after every boot.
+256k caveat: DSA indexer cost grows with n_past but is minor vs the
+expert streaming; measured warm pp matches 32k-era numbers.
