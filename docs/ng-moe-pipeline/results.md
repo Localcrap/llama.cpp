@@ -116,3 +116,29 @@ decision: 256k ctx on this box is viable for warm batch processing of
 long documents, NOT for interactive small-prompt use (10-17 s per
 message). Interactive + long-context needs the memory budget problem
 solved (see 5800X dual-GPU analysis) or a smaller model.
+
+## 2026-10-07 mainline master (MoE cache PR #29887) vs glm5-min A/B - same box, same harness
+commit: bd4eeaa04 (mainline master, MoE cache merged) vs glm5-min HEAD
+config: ab-ml.sh, 32k ctx, ub 2048, t12/16, fa, -fit off, 2 warm pp + 1 tg
+
+| config | pp warm | tg |
+|---|---|---|
+| mainline streaming (ncmoe 41) | 210.6 t/s | 8.01 t/s |
+| mainline -cmoe --moe-cache-mib 13000 | 230.4 t/s | **3.58 t/s** |
+| mainline + MTP (mainline's own, #29928) | 122.2 t/s | 7.77 t/s |
+| glm5-min streaming | 215.2 t/s | 8.27 t/s |
+| glm5-min + MTP (essay gen) | 197.2 t/s | 7.69 t/s |
+
+| PCIe rx MB/s (p50/p90/max) during pp+tg |
+|---|
+| cmoe: 4455/6580/13720 - streaming: 1606/6806/7032 |
+
+decision: mainline == fork on pp and decode (within noise). The MoE
+expert cache (PR #29887) is a decode REGRESSION on this box: 13 GiB
+cache = 15% coverage of 89 GiB host experts; GLM's hit rate at that
+coverage is far below the ~75% break-even on a x4 link (the thread's
+own GLM data point: 47% hit on x16 => uploads became the bottleneck).
+MTP is neutral for open-ended generation, +10-20% on predictable text.
+ recommendation: either branch performs identically with our tuned
+settings; mainline adds the cache option (useful when PCIe is x16 or
+experts are smaller) at the cost of re-tracking our patches.
