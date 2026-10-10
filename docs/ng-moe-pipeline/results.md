@@ -142,3 +142,18 @@ MTP is neutral for open-ended generation, +10-20% on predictable text.
  recommendation: either branch performs identically with our tuned
 settings; mainline adds the cache option (useful when PCIe is x16 or
 experts are smaller) at the cost of re-tracking our patches.
+
+## 2026-10-10 PolyStrata strata-poly vs llama.cpp on the 3090 x4 box (UD-IQ2_XXS)
+
+hot-expert VRAM cache + concurrent CPU cold experts + MTP/lookup guessing.
+Full table + mechanics + fixes: docs/findings/2026-10-polystrata-glm.md
+
+| ctx | strata-poly tg fresh/adapted | llama.cpp tg |
+|---|---|---|
+| 32K | 13.4-15.8 / 18-22.1 | 8.0-8.3 |
+| 128K | 10.4 / n.m. | n.t. |
+| 256K | 6.6 / n.t. | 8-11 |
+
+pp: strata 108-181 vs llama.cpp 210 (both x4-streaming-bound).
+adopt: strata-poly for <=128K interactive (2-2.7x decode), llama.cpp for 256K.
+no REAP50 needed: lazy page-cache residency fits in 79 GiB usable (no thrash).
