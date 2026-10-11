@@ -157,3 +157,12 @@ Full table + mechanics + fixes: docs/findings/2026-10-polystrata-glm.md
 pp: strata 108-181 vs llama.cpp 210 (both x4-streaming-bound).
 adopt: strata-poly for <=128K interactive (2-2.7x decode), llama.cpp for 256K.
 no REAP50 needed: lazy page-cache residency fits in 79 GiB usable (no thrash).
+
+## 2026-10-11 strata-poly daily-driver adoption + update
+launcher run-glm-poly.sh (env: CTX/MTP/LOOKUP/HOST/PORT/API_KEY), guide:
+docs/polystrata-server.md. MTP off is default on this box: draft block is a
+full extra MoE layer (12096 vs 12384 experts); at 262K it cost 0.8 GiB VRAM
+and ~half the fresh decode (6.6 vs 13.8). After 2026-10-11 pull + rebuild:
+expert cache at 262K no-draft jumped 702/5.0 GiB -> 1679/11.9 GiB (upstream
+attention-cache mapping change); fresh decode 14.4 t/s (same as old build -
+fresh is adaptation-bound; steady-state ceiling should rise with the cache).
