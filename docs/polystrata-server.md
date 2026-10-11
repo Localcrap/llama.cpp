@@ -91,6 +91,35 @@ other. Rule of thumb:
 - **llama.cpp**: 262144-ctx work (strata-poly drops below it there), llama.cpp
   API features (lambdas like /completion, loRA, etc.), anything benchmarking.
 
+## Updating (git pull + rebuild)
+
+```bash
+/mnt/ssd/projects/glm53-reap-llamacpp/run-glm-poly.sh stop   # engine must be stopped to relink
+cd /mnt/ssd/projects/PolyStrata && git pull --ff-only
+cmake --build build --target strata-poly -j12
+/mnt/ssd/projects/glm53-reap-llamacpp/run-glm-poly.sh        # same config comes back up
+```
+
+Notes from the 2026-10-11 update:
+
+- The engine binary cannot be overwritten while running (ETXTBSY) — stop first.
+- Untracked local files (`glm.json`, `glm-run.json`, `glm.profile`,
+  `glm-tokenizer/`, `logs/`) survive pulls untouched.
+- Flags occasionally change upstream: if the server fails to start right after
+  an update with a usage dump in `logs/server.log`, an option was renamed or
+  dropped — check `./build/strata-poly` (prints the current option list) and
+  fix `run-glm-poly.sh`'s `ARGS`.
+- If `build/` does not exist (fresh clone), configure first — no ninja on this
+  box, and the arch flag is mandatory (their check rejects CMake's default 52):
+
+  ```bash
+  cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSTRATA_ENABLE_CUDA=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=86
+  ```
+
+- Upstream also ships `./update.sh`, but it targets their `setup.sh`-managed
+  installs; our manual build keeps our own flags and folder layout.
+
 ## If something breaks
 
 - **Server won't start / "GGUF: data section starts past EOF"**: fixed by the
