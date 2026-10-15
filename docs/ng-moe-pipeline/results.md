@@ -166,3 +166,17 @@ and ~half the fresh decode (6.6 vs 13.8). After 2026-10-11 pull + rebuild:
 expert cache at 262K no-draft jumped 702/5.0 GiB -> 1679/11.9 GiB (upstream
 attention-cache mapping change); fresh decode 14.4 t/s (same as old build -
 fresh is adaptation-bound; steady-state ceiling should rise with the cache).
+
+## 2026-10-14 Project Maya (Maya-S24) adopted as daily driver - three-way verdict
+Maya v1.1.10 (Strata-derived GLM-dedicated engine, 3-tier experts, kv-streaming,
+calibrated STRATA_GLM_PCIE_SHARE=0.10). UD-IQ2_XXS/strata-poly/llama.cpp all at
+262144 ctx, same essay harness:
+
+| engine | pp | tg fresh/warm |
+|---|---|---|
+| Maya-S24 | 424 | 22.3 / 29.5 |
+| strata-poly (no draft) | ~150-180 | ~14 / ~20 |
+| llama.cpp | ~210 | 8-11 |
+
+calibration detail: pcie-share sweep 0.00/0.03/0.10/0.25 = 23.2/22.9/25.1/15.1
+tok/s; 12 threads best. strata-poly superseded; docs/maya-server.md is the guide.

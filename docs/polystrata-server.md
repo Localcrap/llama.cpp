@@ -1,5 +1,9 @@
 # GLM-5.3-Flash daily driver: PolyStrata (`strata-poly`)
 
+> SUPERSEDED as daily driver 2026-10-14 by Project Maya: docs/maya-server.md (2x decode,
+> 2x prefill at 262144 ctx, parallel requests). Kept as an alternative engine; the
+> guide below still applies if you start it (stop Maya first - one engine owns the GPU).
+
 Adopted 2026-10-10 as the daily engine for context <= 128K; llama.cpp stays the
 256K engine. Evaluation data: [findings/2026-10-polystrata-glm.md](findings/2026-10-polystrata-glm.md).
 
