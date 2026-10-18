@@ -180,3 +180,9 @@ calibrated STRATA_GLM_PCIE_SHARE=0.10). UD-IQ2_XXS/strata-poly/llama.cpp all at
 
 calibration detail: pcie-share sweep 0.00/0.03/0.10/0.25 = 23.2/22.9/25.1/15.1
 tok/s; 12 threads best. strata-poly superseded; docs/maya-server.md is the guide.
+
+## 2026-10-18 Maya v1.1.10 -> v1.1.15 update
+Zen 5 AVX-512 VBMI CPU-lane rows (#227) do NOT reproduce their +6-8% here:
+warm decode 29.5 -> 27.9 t/s (within single-run noise), pp 424 -> 431.
+Our CPU lane is bandwidth-bound (LPDDR5X), compute optimizations don't move
+it - consistent with the tuner picking pcie-share 0.10. Keep MISS_SKIP off.
