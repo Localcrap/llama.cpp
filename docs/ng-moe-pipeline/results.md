@@ -186,3 +186,8 @@ Zen 5 AVX-512 VBMI CPU-lane rows (#227) do NOT reproduce their +6-8% here:
 warm decode 29.5 -> 27.9 t/s (within single-run noise), pp 424 -> 431.
 Our CPU lane is bandwidth-bound (LPDDR5X), compute optimizations don't move
 it - consistent with the tuner picking pcie-share 0.10. Keep MISS_SKIP off.
+
+## 2026-10-22 Maya v1.1.15 -> v1.1.21 update
+Mainly DeepSeek-V4.1-Flash (748B) added as a second model; for GLM: Responses
+API (/v1/responses), repetition penalties, GLM parallel split rows (opt-in
+#324), prefill profiling (#284). Rebuilt, restarted at 524288, sane.
