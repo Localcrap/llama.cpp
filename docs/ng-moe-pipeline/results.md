@@ -211,3 +211,13 @@ ADOPTED: MAYA_GLM_DSA_SCORE2=rx1b8 (+16.8% decode vs original at 512K;
 register-staged query beats LDS, 8 blocks/SM). MLA_ATTN2 moot on Ampere
 (tensor-core attention runs). glm_attn_bench is HIP-build-only; swept via
 live engine stats instead (bench-moe-cpu/maya-dsa-sweep.sh).
+
+## 2026-10-25 GPU unlock (Zagitta/gpu-unlock v1.0.0) - engaged, no effect on our stack
+3090 GA102 10de:2204 @ 0000:c6:00.0; kmod + initramfs, gpu_unlock.targets=all,
+power raised 250 -> 350 W. Kernel verdict: "gpu_unlock: unlocked".
+Maya-S24 512K essay bench: pp 431.5 -> 432.2, tg unchanged (22.8/28.0).
+Why: Maya's prompt path runs 2-bit experts as INT8 MMQ (ggml kernels) and
+decode is bandwidth-bound - the unlock doubles FP16/BF16-FMA->FP32 issue
+rate, which neither uses. Payoff would require FP16/BF16-heavy paths: EXL3
+packs (tensor-core FP16 decode), vLLM/FP16 engines, diffusion. Outputs
+bit-identical per upstream reports; keeping it (zero cost, future option).
