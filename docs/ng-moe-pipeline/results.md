@@ -191,3 +191,23 @@ it - consistent with the tuner picking pcie-share 0.10. Keep MISS_SKIP off.
 Mainly DeepSeek-V4.1-Flash (748B) added as a second model; for GLM: Responses
 API (/v1/responses), repetition penalties, GLM parallel split rows (opt-in
 #324), prefill profiling (#284). Rebuilt, restarted at 524288, sane.
+
+## 2026-10-25 Maya v1.1.28 + DSA score kernel sweep (512K ctx, single 3090)
+v1.1.21 -> v1.1.28 rebuilt (GLM: Responses API since 1.1.18, opt-in decode
+attention kernels #457). MAYA_GLM_DSA_SCORE2 sweep at 512K via engine
+glm-stat ms/tok (192-tok gen after 64-tok warm):
+
+| label | ms/tok | tok/s |
+|---|---|---|
+| unset (original) | 45.10 | 22.17 |
+| rx1b4 | 39.06 | 25.60 |
+| rx2b4 | 40.81 | 24.51 |
+| rx2b8 | 39.05 | 25.61 |
+| rx1b8 | **37.87** | **26.40** |
+| sx1b4 | 46.53 | 21.49 |
+| sx2b8 | 38.31 | 26.10 |
+
+ADOPTED: MAYA_GLM_DSA_SCORE2=rx1b8 (+16.8% decode vs original at 512K;
+register-staged query beats LDS, 8 blocks/SM). MLA_ATTN2 moot on Ampere
+(tensor-core attention runs). glm_attn_bench is HIP-build-only; swept via
+live engine stats instead (bench-moe-cpu/maya-dsa-sweep.sh).
