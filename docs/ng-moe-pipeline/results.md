@@ -275,3 +275,23 @@ kernel path past every take-two label - the reverse of the v1.1.28 sweep:
 unset -18% since last week; adopted rx1b8 now a ~7% penalty. MAYA_GLM_DSA_SCORE2
 removed from the config (sweep script left sx2b8 behind; cleaned). Lesson: opt-in
 kernel knobs decay - re-sweep after engine-path changes. maya-dsa-sweep.sh kept.
+
+## 2026-10-31 --parallel 4 A/B (v1.1.43, 512K) - a lone request pays, reverted
+Single-request essay bench with --parallel 4 in config args vs --parallel 1:
+
+| | parallel 1 | parallel 4 |
+|---|---|---|
+| pp (4K) | 562.8 | 335.8 (-40%) |
+| tg warm | 28.06 | 17.90 (-36%) |
+| engine decode | 35.4 ms/tok | 40.5 ms/tok |
+| vram hit | 63.6% | 57.6% |
+
+Not memory: expert pools identical (2255/2373 MB VRAM, same RAM tier). The
+engine switches to batched steps (4-slot bookkeeping per step) and a
+chunked/interleave-ready prompt scheduler (stat: prompt 23.7 vs 2.0 ms/tok).
+A lone request pays for concurrency it does not use. Reverted to default 1;
+config diffed byte-equal to the pre-experiment backup, warm 26.4 t/s after
+restart (rewarming to the 28 band). If concurrent agents are ever wanted:
+retry --parallel 2 + the opt-in MAYA_GLM_ROWS_ATTN=1 / MAYA_GLM_MULTI_MTP
+knobs that exist to recover batched-step efficiency; measure the 2-up
+throughput, not the 1-up regression.
