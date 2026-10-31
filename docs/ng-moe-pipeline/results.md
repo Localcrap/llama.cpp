@@ -221,3 +221,20 @@ decode is bandwidth-bound - the unlock doubles FP16/BF16-FMA->FP32 issue
 rate, which neither uses. Payoff would require FP16/BF16-heavy paths: EXL3
 packs (tensor-core FP16 decode), vLLM/FP16 engines, diffusion. Outputs
 bit-identical per upstream reports; keeping it (zero cost, future option).
+
+## 2026-10-31 Maya v1.1.28 -> v1.1.43 update (15 releases)
+Upstream added MiniMax-M3.1-Flash as a third model (moot here); GLM-relevant:
+prompt chunk fallback fix (#673, v1.1.42), prompt GEMV block reads + route
+kernels (#560/#451/#486, bit-for-bit), answers no longer cut mid-thinking
+(#709), loop guard keeps long prompts whole (~15x next agent turn on 150K
+convs #704), streamed tool args no longer slow (#626), cancelled prompt
+reads resume (#573), stopped requests drained (#603), env keys accepted
+under either name (#686), no-terminal starts skip calibration (our tuned
+values pinned/remembered; CPU lane still picks 12 threads).
+
+Essay bench @512K (baselines from v1.1.28 + unlock):
+- pp: 432.2 -> **562.8 t/s (+30%)** - log shows "chunk 1/1, 4062 tokens":
+  the 4K prompt now reads in one chunk (was silently 768-token chunks)
+- tg fresh 21.4 (band 22.1-22.8, cold-cache noise), warm 28.06 (28.0)
+- glm-stat decode 35.43 ms/tok (28.23 tok/s) vs rx1b8 sweep 37.87 - route
+  kernel work plausibly stacked; DSA_SCORE2=rx1b8 still in env, engaged

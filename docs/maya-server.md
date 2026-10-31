@@ -63,3 +63,9 @@ on demand). 838 stars, active project (v1.1.10).
 - Disk: model at `/mnt/ssd/projects/Maya-data/models/Maya-S24` (~95 GB).
 - Update: `git pull && ./maya.sh` (or dashboard About > Update); the model is
   not re-downloaded. Re-run `--calibrate` after GPU/CPU/RAM changes.
+
+### v1.1.43 note
+Starts with no terminal (scripts, nohup) skip the startup speed calibration
+and use remembered/pinned settings instead. Run `./maya.sh --calibrate` once
+from a terminal if the hardware changed (driver, GPU slot). The engine log
+line "glm fast: CUDA0 CPU lane: N threads ..." shows the applied values.
