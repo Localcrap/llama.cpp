@@ -295,3 +295,14 @@ restart (rewarming to the 28 band). If concurrent agents are ever wanted:
 retry --parallel 2 + the opt-in MAYA_GLM_ROWS_ATTN=1 / MAYA_GLM_MULTI_MTP
 knobs that exist to recover batched-step efficiency; measure the 2-up
 throughput, not the 1-up regression.
+
+## 2026-10-31 --parallel 2 A/B (v1.1.43, 512K) - zero free lunch, reverted
+Solo: pp 402.3 (-28%), tg warm 25.71 (-8%), engine 37.66 ms/tok.
+2-up concurrent: 14.00 + 14.00 t/s = combined 27.99 vs solo 28.06 - the
+combined rate EQUALS the solo rate (2x256 tok finished in the same wall
+time as serial). Decode here is a fixed pie (CPU lane + PCIe x4); batching
+divides it, shared weight reads cannot grow it (experts not VRAM-resident).
+Phase-B recovery knobs (ROWS_ATTN/MULTI_MTP) pointless: the batched-vs-solo
+gap is already zero. Reverted to default 1; config diffed byte-equal to
+backup. Parallel ladder complete: N=2 flat, N=4 regressive - keep parallel
+off on this box.
