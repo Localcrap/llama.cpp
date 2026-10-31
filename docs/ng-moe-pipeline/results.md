@@ -238,3 +238,24 @@ Essay bench @512K (baselines from v1.1.28 + unlock):
 - tg fresh 21.4 (band 22.1-22.8, cold-cache noise), warm 28.06 (28.0)
 - glm-stat decode 35.43 ms/tok (28.23 tok/s) vs rx1b8 sweep 37.87 - route
   kernel work plausibly stacked; DSA_SCORE2=rx1b8 still in env, engaged
+
+## 2026-10-31 DFlash2 drafter A/B (v1.1.43, 512K, single 3090) - MTP stays
+Anbeeld GLM-5.3-Flash-DFlash2-Q4_K_M (717 MB VRAM, sha256 vs upstream pin;
+maya.py DFLASH), config args --dflash. Mutually exclusive with MTP
+("MTP off - the NextN draft block is not loaded").
+
+| | MTP | DFlash2 |
+|---|---|---|
+| pp (4K) | 562.8 | 432.5 |
+| tg warm | 28.06 | 19.97 |
+| engine decode | 35.43 ms/tok | 49.67 ms/tok |
+| draft acceptance | - | 93.3% / 89.7% |
+| cpu lane ms/tok | 21.25 | 39.37 |
+
+93% acceptance yet -40% decode: each 8-row verify window pulls 8 positions'
+expert routes through the PCIe-x4/CPU-lane bottleneck; fewer fetches/token
+(2.5 vs 7.3) do not pay for the wider steps. Prefill also regressed despite
+chunk 1/1 (drafter shrank the VRAM expert pool, more prompt experts on the
+CPU lane: wall 9.2 s vs 6.8 s). DGX Spark's +8-26% needs resident experts +
+free compute. Reverted to MTP; drafter GGUF kept on the SSD for a future
+retest (faster interconnect or experts-resident config).
