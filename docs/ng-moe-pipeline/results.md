@@ -259,3 +259,19 @@ chunk 1/1 (drafter shrank the VRAM expert pool, more prompt experts on the
 CPU lane: wall 9.2 s vs 6.8 s). DGX Spark's +8-26% needs resident experts +
 free compute. Reverted to MTP; drafter GGUF kept on the SSD for a future
 retest (faster interconnect or experts-resident config).
+
+## 2026-10-31 DSA_SCORE2 re-sweep after v1.1.43 - knob removed, stock kernel wins
+v1.1.41's route-kernel/GEMV work (#560/#451/#486) sped up the ORIGINAL score
+kernel path past every take-two label - the reverse of the v1.1.28 sweep:
+
+| label | v1.1.28 sweep | v1.1.43 sweep |
+|---|---|---|
+| unset | 45.10 | **36.83** |
+| rx1b8 | **37.87** | 39.56 |
+| rx2b16 | - | 37.44 |
+| rx1b16 | - | 37.98 |
+| (others) | 38.31-46.53 | 37.79-39.28 |
+
+unset -18% since last week; adopted rx1b8 now a ~7% penalty. MAYA_GLM_DSA_SCORE2
+removed from the config (sweep script left sx2b8 behind; cleaned). Lesson: opt-in
+kernel knobs decay - re-sweep after engine-path changes. maya-dsa-sweep.sh kept.
