@@ -347,3 +347,11 @@ User-raised --max-context 65536 -> 262144. Cost: none. pp 373.4 / tg warm
 (~2000 vs 888 of 15,744) instead of shrinking the pool. Prompt-lookup
 drafting active with DSpark off (2/3 drafts kept on the essay prompt).
 DeepSeek serves 256K on 8096 as of this note.
+
+### 2026-11-02 correction: 512K on DeepSeek XS v2 is fine (~19 t/s)
+Earlier "0.74 t/s collapse" was ONE cold-cache generation right after the
+tierer reshuffled (884 vs 1996 VRAM experts) - measurement error. Four-gen
+warm-up at 524288: 1.32 -> 18.50 -> 18.24 -> 19.53 t/s (engine 19.66,
+CPU lane 56.5% of experts). Steady state ~19 t/s vs 21.4 at 256K: the real
+512K cost is ~10%. KEPT at 524288 per user preference. Lesson (again):
+never judge Maya on a single cold gen - "first answers are the slowest".
