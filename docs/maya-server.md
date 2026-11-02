@@ -78,3 +78,6 @@ the other; both answer on port 8096.
 DeepSeek runs ctx 65536, `--dspark off` (measured faster than drafting on
 this box), experts tier VRAM/RAM/SSD-in-place. Config: maya-ds4.json.
 The dashboard's Models page can also switch models.
+The setup writes no "host" key into new model configs (server defaults to
+127.0.0.1 - unreachable via Tailscale). Add "host": "0.0.0.0" to a new
+config before first start (maya-ds4.json got this on 2026-11-02).
