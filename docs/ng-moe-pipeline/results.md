@@ -306,3 +306,36 @@ Phase-B recovery knobs (ROWS_ATTN/MULTI_MTP) pointless: the batched-vs-solo
 gap is already zero. Reverted to default 1; config diffed byte-equal to
 backup. Parallel ladder complete: N=2 flat, N=4 regressive - keep parallel
 off on this box.
+
+## 2026-11-02 DeepSeek-V4.1-Flash Maya-XS v2 installed + benched (v1.1.49)
+Engine updated v1.1.43 -> v1.1.49 first. Deleted the old llama.cpp-era
+DeepSeek-V4-Flash-0731 unsloth quants (UD-IQ3_XXS 98G + UD-Q2_K_XL 91G) for
+space; setup downloaded Maya-XS v2: 117 GB weights (IQ1_S 95.6 + IQ2_XXS
+17.5 mixed) + 167.7 GB Engram tables (Q6_K, SSD-read) + vision, DSpark
+drafter. Config maya-ds4.json; setup port 8080 collided with an unrelated
+java process -> moved to 8096 (one port for whichever model serves).
+
+Placement on 24 GB VRAM + 91 GB RAM (ctx 65536, setup's recommendation):
+888/15,744 experts in VRAM (15.3 GB), most-routed 72.4 GB read ahead into
+RAM (file-backed, in place), remainder (~10 GB) streamed from the SSD per
+token; one-GPU decode path on; 12 threads; prompt chunks 30,720.
+
+Essay bench @64K, untuned defaults:
+| | DeepSeek XS v2 | GLM Maya-S24 |
+|---|---|---|
+| pp (4K) | 367.0 | 562.8 |
+| tg fresh | 9.38 | 21.4 |
+| tg warm | 20.34 (DSpark) / **21.48 (off)** | 28.06 |
+| draft acceptance | 113/142 = 80% | MTP on by default |
+| expert cache hit | 67.2% | ~63.6% |
+
+DSPark A/B: off wins (+5.6%) despite 80% acceptance - same verdict as GLM
+DFlash2 and --parallel: on a CPU-lane/PCIe-bound box drafting rows cost
+more than kept drafts save. ADOPTED --dspark off.
+`--speed-calibration` hung ~80 min at "ready" with no measurement output
+(killed by timeout; not retried) - possible upstream bug on no-terminal
+starts, worth reporting if it reproduces.
+
+Switch: GLM = bench-moe-cpu/maya-ctx.sh 524288; DeepSeek = project-maya/
+run-maya-ds4.sh (both serve port 8096, one at a time). GLM is the daily
+driver (faster + 512K ctx); DeepSeek is the bigger brain at ~3/4 the speed.

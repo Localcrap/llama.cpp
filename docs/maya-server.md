@@ -69,3 +69,12 @@ Starts with no terminal (scripts, nohup) skip the startup speed calibration
 and use remembered/pinned settings instead. Run `./maya.sh --calibrate` once
 from a terminal if the hardware changed (driver, GPU slot). The engine log
 line "glm fast: CUDA0 CPU lane: N threads ..." shows the applied values.
+
+### Second model: DeepSeek-V4.1-Flash Maya-XS v2 (2026-11-02)
+Installed alongside GLM (v1.1.49). Switch = stop the running model, start
+the other; both answer on port 8096.
+- GLM Maya-S24: `bench-moe-cpu/maya-ctx.sh 524288`
+- DeepSeek Maya-XS: `cd /mnt/ssd/projects/project-maya && ./run-maya-ds4.sh`
+DeepSeek runs ctx 65536, `--dspark off` (measured faster than drafting on
+this box), experts tier VRAM/RAM/SSD-in-place. Config: maya-ds4.json.
+The dashboard's Models page can also switch models.
