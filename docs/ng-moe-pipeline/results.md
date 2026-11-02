@@ -339,3 +339,11 @@ starts, worth reporting if it reproduces.
 Switch: GLM = bench-moe-cpu/maya-ctx.sh 524288; DeepSeek = project-maya/
 run-maya-ds4.sh (both serve port 8096, one at a time). GLM is the daily
 driver (faster + 512K ctx); DeepSeek is the bigger brain at ~3/4 the speed.
+
+### 2026-11-02 addendum: DeepSeek XS v2 at 256K ctx - free
+User-raised --max-context 65536 -> 262144. Cost: none. pp 373.4 / tg warm
+21.37 (vs 367.0 / 21.48 at 64K). KV streaming absorbs the 4x context
+(VRAM caches 0.06 -> 0.24 GB); the tierer promoted MORE experts to VRAM
+(~2000 vs 888 of 15,744) instead of shrinking the pool. Prompt-lookup
+drafting active with DSpark off (2/3 drafts kept on the essay prompt).
+DeepSeek serves 256K on 8096 as of this note.
